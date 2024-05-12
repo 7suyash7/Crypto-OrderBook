@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Crypto OrderBook</title>
+  <script src="wasm_exec.js"></script>
+  <style>
+    body {
+        font-family: "Courier New", monospace;
+        margin: 20px;
+        background-color: #000;
+        color: #fff;
+    }
+    h1, h2, h3, p {
+        color: #0f0;
+    }
+    #marketData {
+        margin-top: 20px;
+        border: 1px solid #444;
+        padding: 15px;
+        background-color: #111;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    }
+    .price-up {
+        color: #0f0;
+    }
+    .price-down {
+        color: #f00;
+    }
+    .highlight {
+        color: #ff0;
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 15px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    }
+    th, td {
+        border: 1px solid #444;
+        padding: 10px;
+        text-align: center;
+        color: #0f0;
+    }
+    th {
+        background-color: #222;
+    }
+    tr:nth-child(even) {
+        background-color: #111;
+    }
+    tr:nth-child(odd) {
+        background-color: #000;
+    }
+    tr:hover {
+        background-color: #222;
+    }
+    #depthChart {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 15px;
+    }
+    .depth-column {
+        width: 48%;
+    }
+    .bar-container {
+        display: flex;
+        align-items: center;
+        margin: 5px 0;
+    }
+    .bar {
+        background-color: #0f0;
+        height: 20px;
+        margin-left: 10px;
+    }
+    .bar.ask {
+        background-color: #f00;
+    }
+</style>
+</head>
+<body>
+<h1>Binance OrderBook</h1>
+<div id="marketData">
+    <h2>Market Overview</h2>
+    <label for="symbolSelect"><strong>Select Trading Pair:</strong></label>
+        <select id="symbolSelect">
+            <option value="btcusdt">BTC/USDT</option>
+            <option value="ethusdt">ETH/USDT</option>
+            <option value="solusdt">SOL/USDT</option>
+        </select>
+    <p><strong>Mark Price:</strong> <span id="markPrice">Loading...</span> <span id="priceArrow"></span></p>
+    <p><strong>Funding Rate:</strong> <span id="fundingRate">Loading...</span></p>
+    <h3>Order Book</h3>
+    <table>
+        <thead>
+            <tr>
+                <th colspan="2">Asks</th>
+                <th colspan="2">Bids</th>
+            </tr>
+            <tr>
+                <th>Price</th>
+                <th>Volume</th>
+                <th>Price</th>
+                <th>Volume</th>
+            </tr>
+        </thead>
+        <tbody id="orderBook"></tbody>
+    </table>
+    <h3>Order Book Depth Chart</h3>
+    <div id="depthChart">
+        <div class="depth-column" id="asksColumn">
+            <h4>Asks</h4>
+        </div>
+        <div class="depth-column" id="bidsColumn">
+            <h4>Bids</h4>
+        </div>
+    </div>
+</div>
+<script>
+const go = new Go();
+fundingRateThreshold = 0
+WebAssembly.instantiateStreaming(fetch('main.wasm'), go.importObject).then((result) => {
+    go.run(result.instance);
+    // fetch market data every 1 seconds
+    fetchMarketData();
+    setInterval(fetchMarketData, 10);
+});
+
+const symbolSelect = document.getElementById('symbolSelect');
+symbolSelect.addEventListener('change', (event) => {
+    const selectedSymbol = event.target.value;
+    fetch(`/api/switchsymbol?symbol=${selectedSymbol}`)
+        .then(response => {
+            if (response.ok) {
+                clearMarketData();
+                fetchMarketData();
+            } else {
+                console.error('Error switching symbol:', response.statusText);
+            }
+        })
+        .catch(err => console.error('Error switching symbol:', err));
+});
+
+function clearMarketData() {
+    document.getElementById('markPrice').textContent = 'Loading...';
+    document.getElementById('priceArrow').textContent = '';
+    document.getElementById('fundingRate').textContent = 'Loading...';
+    document.getElementById('orderBook').innerHTML = '';
+    document.getElementById('asksColumn').innerHTML = '<h4>Asks</h4>';
+    document.getElementById('bidsColumn').innerHTML = '<h4>Bids</h4>';
+}
+
+function fetchMarketData() {
+    fetch('/api/marketdata')
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById('markPrice').textContent = data.markPrice;
+            document.getElementById('priceArrow').textContent = data.priceArrow;
+            document.getElementById('priceArrow').className = (data.priceArrow === '↑') ? 'price-up' : 'price-down';
+
+            const fundingRateElem = document.getElementById('fundingRate');
+            fundingRateElem.textContent = `${data.fundingRate}%`;
+            const fundingRate = parseFloat(data.fundingRate);
+            fundingRateElem.className = (fundingRate >= fundingRateThreshold) ? 'highlight' : '';
+
+            const orderBookTable = document.getElementById('orderBook');
+            orderBookTable.innerHTML = '';
+
+            const maxLength = Math.max(data.asks.length, data.bids.length);
+            for (let i = 0; i < maxLength; i++) {
+                const ask = data.asks[i] || { Price: 'N/A', Volume: 'N/A' };
+                const bid = data.bids[i] || { Price: 'N/A', Volume: 'N/A' };
+                orderBookTable.innerHTML += `<tr><td>${ask.Price}</td><td>${ask.Volume}</td><td>${bid.Price}</td><td>${bid.Volume}</td></tr>`;
+            }
+
+            updateDepthChart(data.asks, data.bids);
+        })
+        .catch(err => console.error('Error fetching market data:', err));
+}
+
+function updateDepthChart(asks, bids) {
+    const asksColumn = document.getElementById('asksColumn');
+    const bidsColumn = document.getElementById('bidsColumn');
+    asksColumn.innerHTML = '<h4>Asks</h4>';
+    bidsColumn.innerHTML = '<h4>Bids</h4>';
+
+    asks.forEach(ask => {
+        const barWidth = parseFloat(ask.Volume) * 10;
+        asksColumn.innerHTML += `<div class="bar-container"><span>${ask.Price}:</span><div class="bar ask" style="width: ${barWidth}px;"></div></div>`;
+    });
+
+    bids.forEach(bid => {
+        const barWidth = parseFloat(bid.Volume) * 10;
+        bidsColumn.innerHTML += `<div class="bar-container"><span>${bid.Price}:</span><div class="bar" style="width: ${barWidth}px;"></div></div>`;
+    });
+}
+</script>
+</body>
+</html>
